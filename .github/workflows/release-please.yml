@@ -1,0 +1,21 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # 'simple' release type just updates the CHANGELOG.md and creates GitHub Releases
+          # based on your Conventional Commits (e.g., 'feat: added something', 'fix: bug').
+          # It does not try to mutate language-specific package files (like a setup.py or package.json).
+          release-type: simple
