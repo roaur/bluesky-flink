@@ -1,0 +1,80 @@
+# Redpanda is a stateful database (message broker), so we must use a StatefulSet, not a Deployment.
+# StatefulSets ensure our 1 replica gets a predictable name (redpanda-0) and a durable volume 
+# that won't get deleted if the container restarts.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+  namespace: bluesky
+spec:
+  serviceName: redpanda # Required field for StatefulSets
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+      - name: redpanda
+        image: redpandadata/redpanda:latest
+        command:
+        # Starting redpanda with exact dev parameters.
+        # --overprovisioned tells Redpanda it doesn't own the whole physical machine.
+        - redpanda
+        - start
+        - --smp
+        - "1"
+        - --memory
+        - "1G"
+        - --reserve-memory
+        - "0M"
+        - --overprovisioned
+        - --node-id
+        - "0"
+        - --kafka-addr
+        - "PLAINTEXT://0.0.0.0:9092"
+        - --advertise-kafka-addr
+        - "PLAINTEXT://redpanda:9092"   # Internal K8s DNS name for Kafka clients
+        - --schema-registry-addr
+        - "0.0.0.0:8081"                # Built-in Avro Schema Registry endpoint
+        ports:
+        - containerPort: 9092
+          name: kafka
+        - containerPort: 8081
+          name: schemaregistry
+        
+        # We attach the PersistentVolumeClaim here to /var/lib/redpanda/data
+        volumeMounts:
+        - name: redpanda-data
+          mountPath: /var/lib/redpanda/data
+
+  # This PVC asks K8s for 10GB of real disk space. When the pod starts, K8s mounts it.
+  volumeClaimTemplates:
+  - metadata:
+      name: redpanda-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+# The Service acts as the internal DNS router.
+# Flink and our Python consumer simply talk to "redpanda:9092" and this Service routes it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: bluesky
+spec:
+  selector:
+    app: redpanda
+  ports:
+  - name: kafka
+    port: 9092
+    targetPort: 9092
+  - name: schemaregistry
+    port: 8081
+    targetPort: 8081

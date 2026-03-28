@@ -1,0 +1,28 @@
+# This is NOT a standard Kubernetes YAML file!
+# This is a special configuration file specifically for 'kind' (Kubernetes In Docker).
+# It tells the 'kind' CLI how to construct the virtual cluster on your laptop.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  # By default, everything running in the Kubernetes cluster is hidden inside 
+  # an isolated virtual network within Docker. 
+  # These 'extraPortMappings' drill holes through that isolation fence, mapping 
+  # the cluster's internal ports to your physical Mac/PC's localhost ports.
+  # This lets you literally type "localhost:8081" in your Chrome browser to see Flink.
+  extraPortMappings:
+  - containerPort: 30081
+    hostPort: 8081
+    protocol: TCP # Map Flink UI
+  - containerPort: 30000
+    hostPort: 9000
+    protocol: TCP # Map Minio API
+  - containerPort: 30001
+    hostPort: 9001
+    protocol: TCP # Map Minio Console
+  - containerPort: 30123
+    hostPort: 8123
+    protocol: TCP # Map ClickHouse Dashboard
+  - containerPort: 30092
+    hostPort: 9092
+    protocol: TCP # Map Redpanda Kafka API

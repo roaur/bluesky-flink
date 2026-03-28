@@ -1,0 +1,33 @@
+# The Firehose Consumer is our custom Python script that reads the Bluesky Jetstream.
+# It is completely stateless, meaning it just pipes data to Redpanda and forgets it.
+# Therefore, we use a simple Deployment object for it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: firehose-consumer
+  namespace: bluesky
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: firehose-consumer
+  template:
+    metadata:
+      labels:
+        app: firehose-consumer
+    spec:
+      containers:
+      - name: consumer
+        
+        # 'firehose-consumer:latest' is NOT hosted on Dockerhub.
+        # It is built locally by the bootstrap.sh script and injected into the cluster.
+        image: firehose-consumer:latest
+        
+        # imagePullPolicy: Never tells Kubernetes: "Don't look on the internet for this."
+        # "Just use the image I gave to the local cluster cache."
+        imagePullPolicy: Never
+        
+        # Pull all required environment variables from the ConfigMap we created in 01-configmaps.yaml
+        envFrom:
+        - configMapRef:
+            name: bluesky-config

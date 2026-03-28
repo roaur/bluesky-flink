@@ -1,0 +1,131 @@
+# The Flink JobManager is the master node of the Flink cluster. It is stateless 
+# (state is kept in checkpoints on MinIO/S3), so we deploy it as a Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: bluesky
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: jobmanager
+    spec:
+      # InitContainers run strictly *before* the main container starts.
+      # We use this one to download the Iceberg and AWS JARs into a shared folder so 
+      # the Flink SQL engine can talk to MinIO/Iceberg properly.
+      initContainers:
+      - name: flink-jars-init
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo 'Downloading Iceberg connector and AWS bundle JARs...'
+          curl -sL -o /opt/flink/lib/iceberg-flink-runtime-1.18-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.18/1.5.2/iceberg-flink-runtime-1.18-1.5.2.jar'
+          curl -sL -o /opt/flink/lib/iceberg-aws-bundle-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.5.2/iceberg-aws-bundle-1.5.2.jar'
+          echo 'JARs downloaded successfully.'
+        volumeMounts:
+        - name: flink-jars        # This mounts the emptyDir block created below
+          mountPath: /opt/flink/lib
+
+      containers:
+      - name: jobmanager
+        image: flink:1.18-scala_2.12-java11
+        args: ["jobmanager"]      # Tells the image to act as the primary coordinator
+        ports:
+        - containerPort: 8081
+          name: ui
+        - containerPort: 6123
+          name: rpc
+        envFrom:
+        - configMapRef:
+            name: bluesky-config
+        volumeMounts:
+        - name: flink-config-volume
+          mountPath: /opt/flink/conf
+        - name: flink-jars  # The main container inherits the emptyDir full of JARs!
+          mountPath: /opt/flink/lib
+      
+      # Defining the volumes
+      volumes:
+      - name: flink-config-volume
+        configMap: # Maps the ConfigMap created in bootstrap.sh from the compose files
+          name: flink-config
+      - name: flink-jars
+        emptyDir: {} # A temporary scratchpad directory shared by the InitContainer and JobManager
+
+---
+# Expose the Flink UI and RPC ports
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: bluesky
+spec:
+  type: ClusterIP
+  selector:
+    app: flink
+    component: jobmanager
+  ports:
+  - name: rpc
+    port: 6123
+  - name: blob-server
+    port: 6124
+  - name: webui
+    port: 8081
+
+---
+# The Flink TaskManager executes the actual data processing (the workers).
+# Depending on workload, you can scale this Deployment `replicas` up or down!
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  namespace: bluesky
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: taskmanager
+    spec:
+      initContainers:
+      - name: flink-jars-init
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          curl -sL -o /opt/flink/lib/iceberg-flink-runtime-1.18-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.18/1.5.2/iceberg-flink-runtime-1.18-1.5.2.jar'
+          curl -sL -o /opt/flink/lib/iceberg-aws-bundle-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.5.2/iceberg-aws-bundle-1.5.2.jar'
+        volumeMounts:
+        - name: flink-jars
+          mountPath: /opt/flink/lib
+      containers:
+      - name: taskmanager
+        image: flink:1.18-scala_2.12-java11
+        args: ["taskmanager"]
+        envFrom:
+        - configMapRef:
+            name: bluesky-config
+        volumeMounts:
+        - name: flink-config-volume
+          mountPath: /opt/flink/conf
+        - name: flink-jars
+          mountPath: /opt/flink/lib
+      volumes:
+      - name: flink-config-volume
+        configMap:
+          name: flink-config
+      - name: flink-jars
+        emptyDir: {}

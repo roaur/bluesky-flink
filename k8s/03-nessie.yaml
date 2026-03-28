@@ -1,0 +1,46 @@
+# A Deployment is used for stateless applications. 
+# Nessie acts as our Iceberg REST Catalog, but its state is entirely stored in MinIO (S3) backing it.
+# Therefore, if the Nessie Pod dies, K8s can effortlessly spin up a new one without 
+# needing to re-attach a complex persistent disk.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nessie
+  namespace: bluesky
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nessie
+  template:
+    metadata:
+      labels:
+        app: nessie
+    spec:
+      containers:
+      - name: nessie
+        image: ghcr.io/projectnessie/nessie:latest
+        ports:
+        - containerPort: 19120
+        volumeMounts:
+        - name: nessie-data
+          mountPath: /var/opt/nessie
+      # emptyDir is a temporary disk that is wiped when the Pod dies. 
+      # Useful for scratch space or temporary caches required by the Nessie image.
+      volumes:
+      - name: nessie-data
+        emptyDir: {}
+
+---
+# Service mapping the internal K8s DNS name "nessie" to the Nessie Pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: nessie
+  namespace: bluesky
+spec:
+  selector:
+    app: nessie
+  ports:
+    - port: 19120
+      targetPort: 19120

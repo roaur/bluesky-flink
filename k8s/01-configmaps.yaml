@@ -1,0 +1,21 @@
+# A ConfigMap stores non-confidential data in key-value pairs. 
+# Pods can consume ConfigMaps as environment variables or as configuration files in a volume.
+# This prevents us from hardcoding IPs and passwords into our container images.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bluesky-config
+  namespace: bluesky
+data:
+  # The below key-value pairs will be mounted into containers like python/flink as ENVs
+  MINIO_ROOT_USER: "blueskyadmin"
+  MINIO_ROOT_PASSWORD: "blueskysecret"
+  MINIO_ENDPOINT: "http://minio:9000"
+  AWS_ACCESS_KEY_ID: "blueskyadmin"
+  AWS_SECRET_ACCESS_KEY: "blueskysecret"
+  AWS_REGION: "us-east-1"
+  NESSIE_URI: "http://nessie:19120"
+  FLINK_JOB_MANAGER_RPC_ADDRESS: "flink-jobmanager"
+  FLINK_REST_PORT: "8081"
+  KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+  SCHEMA_REGISTRY_URL: "http://redpanda:8081"

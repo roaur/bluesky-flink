@@ -1,0 +1,7 @@
+# A Namespace is a virtual cluster inside your Kubernetes cluster.
+# By placing all our resources inside the 'bluesky' namespace, we isolate them from 
+# other potential apps running on the cluster (like monitoring tools or other projects).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bluesky

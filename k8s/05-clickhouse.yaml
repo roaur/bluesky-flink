@@ -1,0 +1,136 @@
+# ConfigMaps can store files, not just key/value pairs!
+# Here we dump an entire SQL script into the ConfigMap. 
+# We'll mount this file into the ClickHouse container's auto-init directory.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init-sql
+  namespace: bluesky
+data:
+  init.sql: |
+    -- KAFKA TABLE ENGINE CONFIGURATION
+    -- We read directly from Redpanda Avro Schema Registry
+
+    CREATE TABLE IF NOT EXISTS keyword_counts_queue (
+        word String,
+        count Int64,
+        window_start DateTime64(3),
+        obtained_at DateTime64(3),
+        created_at DateTime64(3)
+    ) ENGINE = Kafka()
+    SETTINGS
+        kafka_broker_list = 'redpanda:9092',
+        kafka_topic_list = 'keyword-counts',
+        kafka_group_name = 'clickhouse-consumer',
+        kafka_format = 'AvroConfluent',
+        format_avro_schema_registry_url = 'http://redpanda:8081';
+
+    -- Target MergeTree table to store the analytics data permanently
+    CREATE TABLE IF NOT EXISTS post_keywords (
+        word String,
+        count Int64,
+        window_start DateTime64(3),
+        obtained_at DateTime64(3),
+        created_at DateTime64(3)
+    ) ENGINE = MergeTree()
+    ORDER BY (window_start, word);
+
+    -- Materialized View to pull from Kafka queue and push to Target auto-magically
+    CREATE MATERIALIZED VIEW IF NOT EXISTS post_keywords_mv TO post_keywords AS
+    SELECT * FROM keyword_counts_queue;
+    
+    -- Same for trending_topics
+    CREATE TABLE IF NOT EXISTS trending_topics_queue (
+        hashtag String,
+        count Int64,
+        window_start DateTime64(3),
+        obtained_at DateTime64(3),
+        created_at DateTime64(3)
+    ) ENGINE = Kafka()
+    SETTINGS
+        kafka_broker_list = 'redpanda:9092',
+        kafka_topic_list = 'trending-topics',
+        kafka_group_name = 'clickhouse-consumer',
+        kafka_format = 'AvroConfluent',
+        format_avro_schema_registry_url = 'http://redpanda:8081';
+
+    CREATE TABLE IF NOT EXISTS trending_topics (
+        hashtag String,
+        count Int64,
+        window_start DateTime64(3),
+        obtained_at DateTime64(3),
+        created_at DateTime64(3)
+    ) ENGINE = MergeTree()
+    ORDER BY (window_start, hashtag);
+
+    CREATE MATERIALIZED VIEW IF NOT EXISTS trending_topics_mv TO trending_topics AS
+    SELECT * FROM trending_topics_queue;
+
+---
+# ClickHouse is a database, therefore we use a StatefulSet and an attached Persistent Volume.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: bluesky
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:latest
+        ports:
+        - containerPort: 8123
+          name: http
+        - containerPort: 9000
+          name: tcp
+        
+        volumeMounts:
+        # Mount the hard drive to store our analytic data
+        - name: clickhouse-data
+          mountPath: /var/lib/clickhouse
+        # Mount the ConfigMap file we wrote above into the entrypoint-init.d
+        # ClickHouse automatically runs any .sql file located here when it boots.
+        - name: clickhouse-init-sql
+          mountPath: /docker-entrypoint-initdb.d
+        
+      # Define where the ConfigMap volume actually comes from
+      volumes:
+      - name: clickhouse-init-sql
+        configMap:
+          name: clickhouse-init-sql
+
+  # Request 10GB of storage for Clickhouse
+  volumeClaimTemplates:
+  - metadata:
+      name: clickhouse-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+# Expose ClickHouse to the rest of the cluster via an internal DNS Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: bluesky
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: tcp
+      port: 9000
+      targetPort: 9000

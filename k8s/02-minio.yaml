@@ -1,0 +1,73 @@
+# A StatefulSet is the K8s object used to manage stateful applications (databases).
+# Unlike a normal 'Deployment', a StatefulSet guarantees the ordering and uniqueness 
+# of its Pods, ensuring MinIO data isn't corrupted if a Pod gets restarted or rescheduled.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: bluesky
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels: # This tells the StatefulSet which pods belong to it
+      app: minio
+  
+  # The Pod template: defines what the actual container looks like
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        command:
+        - server
+        - /data
+        - --console-address
+        - ":9001"
+        # Inject the ConfigMap we created in 01-configmaps.yaml as environment variables
+        envFrom:
+        - configMapRef:
+            name: bluesky-config
+        ports:
+        - containerPort: 9000
+          name: api
+        - containerPort: 9001
+          name: console
+        # Mount the hard drive created below into the container at /data
+        volumeMounts:
+        - name: minio-data
+          mountPath: /data
+
+  # This creates a PersistentVolumeClaim (PVC). 
+  # K8s will automatically provision a 10GB virtual hard drive and attach it to this Pod.
+  volumeClaimTemplates:
+  - metadata:
+      name: minio-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ] # Indicates the volume can be mounted as read-write by a single node
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+# A Service acts as an internal load balancer and DNS record.
+# Other pods will just need to make requests to "http://minio:9000".
+# The Service will magically route that traffic to the correct underlying MinIO pod IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: bluesky
+spec:
+  selector: # This tells the Service to route traffic to any Pod with the label 'app: minio'
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
