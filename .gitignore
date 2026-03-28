@@ -1,0 +1,38 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.ruff_cache/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Kubernetes / Kind
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Docker Compose / Local Volumes (Prevent committing massive database files)
+minio-data/
+nessie-data/
+flink-jobmanager-data/
+flink-taskmanager-data/
+flink-taskmanager-logs/
+flink-jars/
+clickhouse-data/
+redpanda-data/
+**/data/
+
+# Environment variables
+.env
+.env.local
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
