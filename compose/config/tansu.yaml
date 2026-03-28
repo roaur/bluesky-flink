@@ -1,0 +1,15 @@
+server:
+  address: 0.0.0.0:9092
+
+storage:
+  s3:
+    bucket: bluesky-tansu
+    prefix: kafka/
+    region: us-east-1
+    endpoint: http://minio:9000
+    access-key: ${MINIO_ROOT_USER}
+    secret-key: ${MINIO_ROOT_PASSWORD}
+    style: path
+
+schema:
+  registry-enabled: true

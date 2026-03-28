@@ -1,0 +1,186 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: bluesky-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - minio-data:/data
+    networks:
+      - bluesky
+
+  
+
+  nessie:
+    image: ghcr.io/projectnessie/nessie:latest
+    container_name: bluesky-nessie
+    ports:
+      - "19120:19120"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "19120"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - nessie-data:/var/opt/nessie
+    networks:
+      - bluesky
+
+  tansu:
+    image: ghcr.io/tansu-io/tansu:latest
+    container_name: bluesky-tansu
+    ports:
+      - "9092:9092"
+    environment:
+      STORAGE_ENGINE: s3://bluesky-tansu/kafka/
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ENDPOINT: http://minio:9000
+      AWS_REGION: us-east-1
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_ALLOW_HTTP: "1"
+      CLUSTER_ID: bluesky-cluster
+      LISTENER_URL: tcp://0.0.0.0:9092
+      ADVERTISED_LISTENER_URL: tcp://tansu:9092
+      SCHEMA_REGISTRY: s3://bluesky-tansu/schema/
+    command: broker
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    networks:
+      - bluesky
+
+  flink-jobmanager:
+    image: flink:1.18-scala_2.12-java11
+    container_name: bluesky-flink-jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      FLINK_ENV_JAVA_OPTS: "-Dio.secca.netty.sna.enabled=false"
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      JOB_MANAGER_REST_PORT: 8081
+    volumes:
+      - ./config/flink/jobmanager.conf:/opt/flink/conf/jobmanager.conf:ro
+      - ./config/flink/taskmanager.conf:/opt/flink/conf/taskmanager.conf:ro
+      - ./config/flink/log4j.properties:/opt/flink/conf/log4j.properties:ro
+      - flink-jobmanager-data:/opt/flink/data
+      - flink-jars:/opt/flink/lib
+    command: jobmanager
+    depends_on:
+      tansu:
+        condition: service_started
+      flink-jars-init:
+        condition: service_completed_successfully
+    networks:
+      - bluesky
+
+  flink-taskmanager:
+    image: flink:1.18-scala_2.12-java11
+    container_name: bluesky-flink-taskmanager
+    ports:
+      - "6123:6123"
+    environment:
+      FLINK_ENV_JAVA_OPTS: "-Dio.secca.netty.sna.enabled=false"
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_RPC_PORT: 6123
+    volumes:
+      - ./config/flink/jobmanager.conf:/opt/flink/conf/jobmanager.conf:ro
+      - ./config/flink/taskmanager.conf:/opt/flink/conf/taskmanager.conf:ro
+      - ./config/flink/log4j.properties:/opt/flink/conf/log4j.properties:ro
+      - flink-taskmanager-data:/opt/flink/data
+      - flink-taskmanager-logs:/opt/flink/log
+      - flink-jars:/opt/flink/lib
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_started
+      flink-jars-init:
+        condition: service_completed_successfully
+    networks:
+      - bluesky
+
+  flink-sql-runner:
+    image: flink:1.18-scala_2.12-java11
+    container_name: bluesky-flink-sql-runner
+    entrypoint: ["bash", "-c"]
+    command: >-
+      "echo 'Waiting for JobManager...' &&
+       nc -z flink-jobmanager 8081 &&
+       echo 'JobManager ready. Executing SQL...' &&
+       /opt/flink/bin/sql-client.sh embedded -f /sql/00-init-catalogs.sql &&
+       /opt/flink/bin/sql-client.sh embedded -f /sql/01-post-keywords.sql &&
+       /opt/flink/bin/sql-client.sh embedded -f /sql/02-trending-topics.sql &&
+       echo 'SQL jobs submitted.'"
+    environment:
+      FLINK_JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      FLINK_REST_PORT: 8081
+    volumes:
+      - ../flink-jobs/sql:/sql:ro
+      - flink-jars:/opt/flink/lib
+    depends_on:
+      flink-jobmanager:
+        condition: service_started
+      flink-jars-init:
+        condition: service_completed_successfully
+    networks:
+      - bluesky
+    restart: "no"
+
+  flink-jars-init:
+    image: curlimages/curl:latest
+    container_name: bluesky-flink-jars-init
+    user: root
+    volumes:
+      - flink-jars:/opt/flink/lib
+    entrypoint: >-
+      /bin/sh -c "
+      echo 'Downloading Iceberg connector and AWS bundle JARs...' &&
+      curl -sL -o /opt/flink/lib/iceberg-flink-runtime-1.18-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.18/1.5.2/iceberg-flink-runtime-1.18-1.5.2.jar' &&
+      curl -sL -o /opt/flink/lib/iceberg-aws-bundle-1.5.2.jar 'https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.5.2/iceberg-aws-bundle-1.5.2.jar' &&
+      echo 'JARs downloaded successfully.' &&
+      ls -la /opt/flink/lib/*.jar 2>/dev/null | wc -l &&
+      exit 0
+      "
+    networks:
+      - bluesky
+
+  firehose-consumer:
+    build:
+      context: ../firehose-consumer
+      dockerfile: Dockerfile
+    container_name: bluesky-firehose-consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    depends_on:
+      tansu:
+        condition: service_started
+    networks:
+      - bluesky
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+  nessie-data:
+  flink-jobmanager-data:
+  flink-taskmanager-data:
+  flink-taskmanager-logs:
+  flink-jars:
+
+networks:
+  bluesky:
+    driver: bridge
